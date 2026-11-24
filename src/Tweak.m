@@ -105,15 +105,40 @@ static NSURLSessionDataTask *hook_dataTaskWithRequest(id self, SEL _cmd, NSURLRe
     return orig_dataTaskWithRequest(self, _cmd, request, wrapped);
 }
 
+// --- NSURLSessionTask resume hook (covers Alamofire / delegate-based tasks) ---
+typedef void (*TaskResumeIMP)(id self, SEL _cmd);
+static TaskResumeIMP orig_taskResume = NULL;
+
+static void hook_taskResume(NSURLSessionTask *self, SEL _cmd) {
+    NSURL *url = self.originalRequest.URL ?: self.currentRequest.URL;
+    if (is_interesting_url(url)) {
+        NSString *method = self.originalRequest.HTTPMethod ?: @"GET";
+        RFLog(@"[HTTP-START] %@ %@", method, url.absoluteString ?: @"");
+    }
+    if (orig_taskResume) {
+        orig_taskResume(self, _cmd);
+    }
+}
+
 static void install_network_hook(void) {
     Class sessionClass = objc_getClass("NSURLSession");
-    if (!sessionClass) return;
+    if (sessionClass) {
+        SEL sel = sel_registerName("dataTaskWithRequest:completionHandler:");
+        Method m = class_getInstanceMethod(sessionClass, sel);
+        if (m) {
+            orig_dataTaskWithRequest = (DataTaskReqIMP)method_setImplementation(m, (IMP)hook_dataTaskWithRequest);
+            RFLog(@"[RaveFix] Hooked -[NSURLSession dataTaskWithRequest:completionHandler:]");
+        }
+    }
 
-    SEL sel = sel_registerName("dataTaskWithRequest:completionHandler:");
-    Method m = class_getInstanceMethod(sessionClass, sel);
-    if (m) {
-        orig_dataTaskWithRequest = (DataTaskReqIMP)method_setImplementation(m, (IMP)hook_dataTaskWithRequest);
-        RFLog(@"[RaveFix] Hooked -[NSURLSession dataTaskWithRequest:completionHandler:]");
+    Class taskClass = objc_getClass("NSURLSessionTask");
+    if (taskClass) {
+        SEL resumeSel = sel_registerName("resume");
+        Method rm = class_getInstanceMethod(taskClass, resumeSel);
+        if (rm) {
+            orig_taskResume = (TaskResumeIMP)method_setImplementation(rm, (IMP)hook_taskResume);
+            RFLog(@"[RaveFix] Hooked -[NSURLSessionTask resume]");
+        }
     }
 }
 
